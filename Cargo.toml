@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = ["crates/exec", "crates/palestre","crates/pbc", "crates/vm"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+pbc = { path = "crates/pbc" }
+vm = { path = "crates/vm" }
+exec = { path = "crates/exec" }

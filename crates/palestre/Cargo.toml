@@ -1,0 +1,10 @@
+[package]
+name = "palestre"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+pbc.workspace = true
+vm.workspace = true
+exec.workspace = true
