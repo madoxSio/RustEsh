@@ -6,3 +6,6 @@ publish.workspace = true
 
 [dependencies]
 pbc.workspace = true
+
+[lints]
+workspace = true

@@ -11,3 +11,12 @@ publish = false
 pbc = { path = "crates/pbc" }
 vm = { path = "crates/vm" }
 exec = { path = "crates/exec" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"

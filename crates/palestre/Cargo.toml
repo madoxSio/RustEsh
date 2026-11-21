@@ -8,3 +8,8 @@ publish.workspace = true
 pbc.workspace = true
 vm.workspace = true
 exec.workspace = true
+
+
+[lints]
+workspace = true
+
