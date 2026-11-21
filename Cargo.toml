@@ -11,6 +11,7 @@ publish = false
 pbc = { path = "crates/pbc" }
 vm = { path = "crates/vm" }
 exec = { path = "crates/exec" }
+thiserror = "2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

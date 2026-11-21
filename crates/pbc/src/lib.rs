@@ -1,14 +1,5 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Format binaire PBC : chargement et validation d'un fichier .pbc.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+mod fault;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use fault::Fault;
