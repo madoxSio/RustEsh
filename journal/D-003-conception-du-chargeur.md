@@ -6,7 +6,7 @@
 | Date     | 2026-11-22                                     |
 | Auteurs  | Mahamadou                                      |
 | Statut   | adoptée                                        |
-| Commits  | à compléter avec le hash du commit du chargeur |
+| Commits  | cf1b7a5 |
 
 ## 1. Contexte
 

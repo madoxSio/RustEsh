@@ -32,6 +32,12 @@ impl<'a> Reader<'a> {
         Some(u16::from_be_bytes(octets))
     }
 
+    /// Lit un entier signé sur 2 octets, gros-boutiste.
+    pub(crate) fn read_i16(&mut self) -> Option<i16> {
+        let octets: [u8; 2] = self.take(2)?.try_into().ok()?;
+        Some(i16::from_be_bytes(octets))
+    }
+
     /// Lit un entier non signé sur 4 octets, gros-boutiste.
     pub(crate) fn read_u32(&mut self) -> Option<u32> {
         let octets: [u8; 4] = self.take(4)?.try_into().ok()?;
