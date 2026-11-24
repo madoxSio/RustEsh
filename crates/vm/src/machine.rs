@@ -111,6 +111,29 @@ impl<'a> Machine<'a> {
                 let a = self.stack.pop()?;
                 self.stack.push(i64::from(a == 0))?;
             }
+            // a b -- a&b
+            Instruction::And => {
+                let b = self.stack.pop()?;
+                let a = self.stack.pop()?;
+                self.stack.push(a & b)?;
+            }
+            // a b -- a|b
+            Instruction::Or => {
+                let b = self.stack.pop()?;
+                let a = self.stack.pop()?;
+                self.stack.push(a | b)?;
+            }
+            // a b -- a^b
+            Instruction::Xor => {
+                let b = self.stack.pop()?;
+                let a = self.stack.pop()?;
+                self.stack.push(a ^ b)?;
+            }
+            // a -- !a (bit à bit : chaque bit est inversé)
+            Instruction::BNot => {
+                let a = self.stack.pop()?;
+                self.stack.push(!a)?;
+            }
             // a --
             Instruction::Drop => {
                 self.stack.pop()?;
@@ -194,6 +217,10 @@ fn gas_cost(instruction: Instruction) -> u16 {
         Instruction::Lt => 2,
         Instruction::Gt => 2,
         Instruction::Not => 2,
+        Instruction::And => 2,
+        Instruction::Or => 2,
+        Instruction::Xor => 4,
+        Instruction::BNot => 2,
         // Temporaire : complété avec les autres instructions.
         _ => 0,
     }
@@ -350,6 +377,24 @@ mod tests {
             m.stack.push(a).unwrap();
             assert_eq!(m.run(), Ok(()));
             assert_eq!(m.stack().clone().pop(), Ok(attendu), "NOT {a}");
+        }
+    }
+
+    #[test]
+    fn operations_bit_a_bit() {
+        assert_eq!(calcule(6, 3, 0x24), Ok(2)); // AND : 0110 & 0011 = 0010
+        assert_eq!(calcule(6, 3, 0x25), Ok(7)); // OR  : 0110 | 0011 = 0111
+        assert_eq!(calcule(6, 3, 0x26), Ok(5)); // XOR : 0110 ^ 0011 = 0101
+    }
+
+    #[test]
+    fn bnot_inverse_chaque_bit() {
+        for (a, attendu) in [(0, -1), (-1, 0), (5, -6)] {
+            let p = programme(&[0x29, 0x00]); // BNOT, HALT
+            let mut m = Machine::new(&p, 1000);
+            m.stack.push(a).unwrap();
+            assert_eq!(m.run(), Ok(()));
+            assert_eq!(m.stack().clone().pop(), Ok(attendu), "BNOT {a}");
         }
     }
 }
