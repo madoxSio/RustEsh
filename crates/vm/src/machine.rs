@@ -53,6 +53,41 @@ impl<'a> Machine<'a> {
                 let a = self.stack.pop()?;
                 self.stack.push(a.wrapping_add(b))?;
             }
+            // a b -- a-b
+            Instruction::Sub => {
+                let b = self.stack.pop()?;
+                let a = self.stack.pop()?;
+                self.stack.push(a.wrapping_sub(b))?;
+            }
+            // a b -- a*b
+            Instruction::Mul => {
+                let b = self.stack.pop()?;
+                let a = self.stack.pop()?;
+                self.stack.push(a.wrapping_mul(b))?;
+            }
+            // a b -- a/b
+            Instruction::Div => {
+                let b = self.stack.pop()?;
+                let a = self.stack.pop()?;
+                if b == 0 {
+                    return Err(Fault::DivByZero);
+                }
+                self.stack.push(a.wrapping_div(b))?;
+            }
+            // a b -- a%b
+            Instruction::Mod => {
+                let b = self.stack.pop()?;
+                let a = self.stack.pop()?;
+                if b == 0 {
+                    return Err(Fault::DivByZero);
+                }
+                self.stack.push(a.wrapping_rem(b))?;
+            }
+            // a -- -a
+            Instruction::Neg => {
+                let a = self.stack.pop()?;
+                self.stack.push(a.wrapping_neg())?;
+            }
             // a --
             Instruction::Drop => {
                 self.stack.pop()?;
@@ -127,6 +162,11 @@ fn gas_cost(instruction: Instruction) -> u16 {
         Instruction::Over => 1,
         Instruction::Rot => 1,
         Instruction::Add => 2,
+        Instruction::Sub => 2,
+        Instruction::Mul => 2,
+        Instruction::Div => 7,
+        Instruction::Mod => 7,
+        Instruction::Neg => 2,
         // Temporaire : complété avec les autres instructions.
         _ => 0,
     }
@@ -220,5 +260,47 @@ mod tests {
         let mut m = Machine::new(&p, 1000);
         assert_eq!(m.run(), Err(Fault::StackUnderflow));
         assert_eq!(m.gas(), 1000 - 2);
+    }
+
+    /// Pose `a` puis `b` sur la pile, exécute l'opcode donné puis `HALT`, et renvoie le sommet.
+    fn calcule(a: i64, b: i64, opcode: u8) -> Result<i64, Fault> {
+        let p = programme(&[opcode, 0x00]);
+        let mut m = Machine::new(&p, 1000);
+        m.stack.push(a).unwrap();
+        m.stack.push(b).unwrap();
+        m.run()?;
+        m.stack.pop()
+    }
+
+    #[test]
+    fn calculs() {
+        assert_eq!(calcule(7, 3, 0x11), Ok(4)); // SUB : 7 - 3
+        assert_eq!(calcule(7, 3, 0x12), Ok(21)); // MUL
+        assert_eq!(calcule(7, 2, 0x13), Ok(3)); // DIV : on garde la partie entière
+        assert_eq!(calcule(-7, 2, 0x13), Ok(-3)); // DIV : arrondi vers zéro, comme en Rust
+        assert_eq!(calcule(7, 3, 0x14), Ok(1)); // MOD
+        assert_eq!(calcule(-7, 3, 0x14), Ok(-1)); // MOD : garde le signe de a
+    }
+
+    #[test]
+    fn division_par_zero() {
+        assert_eq!(calcule(7, 0, 0x13), Err(Fault::DivByZero));
+        assert_eq!(calcule(7, 0, 0x14), Err(Fault::DivByZero));
+    }
+
+    #[test]
+    fn les_cas_extremes_enveloppent() {
+        assert_eq!(calcule(i64::MIN, 1, 0x11), Ok(i64::MAX)); // SUB
+        assert_eq!(calcule(i64::MIN, -1, 0x13), Ok(i64::MIN)); // DIV (spec, préambule)
+        assert_eq!(calcule(i64::MIN, -1, 0x14), Ok(0)); // MOD (spec, préambule)
+    }
+
+    #[test]
+    fn neg() {
+        let p = programme(&[0x02, 0x00, 0x05, 0x15, 0x00]); // PUSHI16 5, NEG, HALT
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Ok(()));
+        assert_eq!(m.stack().clone().pop(), Ok(-5));
+        assert_eq!(m.gas(), 1000 - 1 - 2);
     }
 }
