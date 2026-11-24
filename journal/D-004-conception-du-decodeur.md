@@ -6,7 +6,7 @@
 | Date     | 2026-11-24                               |
 | Auteurs  | Mahamadou                                |
 | Statut   | adoptée                                  |
-| Commits  | à compléter avec le hash du décodeur     |
+| Commits  | 6c6a57d                                  |
 
 ## 1. Contexte
 
