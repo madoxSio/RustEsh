@@ -88,6 +88,29 @@ impl<'a> Machine<'a> {
                 let a = self.stack.pop()?;
                 self.stack.push(a.wrapping_neg())?;
             }
+            // a b -- 0|1
+            Instruction::Eq => {
+                let b = self.stack.pop()?;
+                let a = self.stack.pop()?;
+                self.stack.push(i64::from(a == b))?;
+            }
+            // a b -- 0|1
+            Instruction::Lt => {
+                let b = self.stack.pop()?;
+                let a = self.stack.pop()?;
+                self.stack.push(i64::from(a < b))?;
+            }
+            // a b -- 0|1
+            Instruction::Gt => {
+                let b = self.stack.pop()?;
+                let a = self.stack.pop()?;
+                self.stack.push(i64::from(a > b))?;
+            }
+            // a -- 0|1 (logique : 1 si a vaut 0)
+            Instruction::Not => {
+                let a = self.stack.pop()?;
+                self.stack.push(i64::from(a == 0))?;
+            }
             // a --
             Instruction::Drop => {
                 self.stack.pop()?;
@@ -167,6 +190,10 @@ fn gas_cost(instruction: Instruction) -> u16 {
         Instruction::Div => 7,
         Instruction::Mod => 7,
         Instruction::Neg => 2,
+        Instruction::Eq => 2,
+        Instruction::Lt => 2,
+        Instruction::Gt => 2,
+        Instruction::Not => 2,
         // Temporaire : complété avec les autres instructions.
         _ => 0,
     }
@@ -302,5 +329,27 @@ mod tests {
         assert_eq!(m.run(), Ok(()));
         assert_eq!(m.stack().clone().pop(), Ok(-5));
         assert_eq!(m.gas(), 1000 - 1 - 2);
+    }
+
+    #[test]
+    fn comparaisons() {
+        assert_eq!(calcule(3, 3, 0x20), Ok(1)); // EQ : 3 == 3
+        assert_eq!(calcule(3, 4, 0x20), Ok(0)); // EQ : 3 == 4
+        assert_eq!(calcule(3, 4, 0x21), Ok(1)); // LT : 3 < 4
+        assert_eq!(calcule(4, 3, 0x21), Ok(0)); // LT : 4 < 3
+        assert_eq!(calcule(-1, 0, 0x21), Ok(1)); // LT : signé, -1 < 0
+        assert_eq!(calcule(4, 3, 0x22), Ok(1)); // GT : 4 > 3
+        assert_eq!(calcule(3, 3, 0x22), Ok(0)); // GT : 3 > 3
+    }
+
+    #[test]
+    fn not_est_logique() {
+        for (a, attendu) in [(0, 1), (1, 0), (5, 0), (-1, 0)] {
+            let p = programme(&[0x23, 0x00]); // NOT, HALT
+            let mut m = Machine::new(&p, 1000);
+            m.stack.push(a).unwrap();
+            assert_eq!(m.run(), Ok(()));
+            assert_eq!(m.stack().clone().pop(), Ok(attendu), "NOT {a}");
+        }
     }
 }
