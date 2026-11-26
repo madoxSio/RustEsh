@@ -134,6 +134,37 @@ impl<'a> Machine<'a> {
                 let a = self.stack.pop()?;
                 self.stack.push(!a)?;
             }
+            // a n -- v (décalage logique à gauche, B.6)
+            Instruction::Shl => {
+                let n = self.stack.pop()?;
+                let a = self.stack.pop()?;
+                let v = match shift_count(n) {
+                    Some(n) => ((a as u64) << n) as i64,
+                    None => 0,
+                };
+                self.stack.push(v)?;
+            }
+            // a n -- v (décalage logique à droite, B.6)
+            Instruction::Shr => {
+                let n = self.stack.pop()?;
+                let a = self.stack.pop()?;
+                let v = match shift_count(n) {
+                    Some(n) => ((a as u64) >> n) as i64,
+                    None => 0,
+                };
+                self.stack.push(v)?;
+            }
+            // a n -- v (décalage arithmétique à droite, B.6)
+            Instruction::Sar => {
+                let n = self.stack.pop()?;
+                let a = self.stack.pop()?;
+                let v = match shift_count(n) {
+                    Some(n) => a >> n,
+                    None if a < 0 => -1,
+                    None => 0,
+                };
+                self.stack.push(v)?;
+            }
             // a --
             Instruction::Drop => {
                 self.stack.pop()?;
@@ -197,6 +228,15 @@ impl<'a> Machine<'a> {
     }
 }
 
+/// Nombre de bits d'un décalage, s'il est dans `0..=63`. Sinon `None` (B.6).
+fn shift_count(n: i64) -> Option<u32> {
+    if (0..=63).contains(&n) {
+        Some(n as u32)
+    } else {
+        None
+    }
+}
+
 /// Prix en gaz de chaque instruction (table de l'annexe B).
 fn gas_cost(instruction: Instruction) -> u16 {
     match instruction {
@@ -221,6 +261,9 @@ fn gas_cost(instruction: Instruction) -> u16 {
         Instruction::Or => 2,
         Instruction::Xor => 4,
         Instruction::BNot => 2,
+        Instruction::Shl => 3,
+        Instruction::Shr => 6,
+        Instruction::Sar => 6,
         // Temporaire : complété avec les autres instructions.
         _ => 0,
     }
@@ -395,6 +438,25 @@ mod tests {
             m.stack.push(a).unwrap();
             assert_eq!(m.run(), Ok(()));
             assert_eq!(m.stack().clone().pop(), Ok(attendu), "BNOT {a}");
+        }
+    }
+
+    #[test]
+    fn decalages() {
+        assert_eq!(calcule(1, 3, 0x27), Ok(8)); // SHL : 0001 -> 1000
+        assert_eq!(calcule(8, 3, 0x28), Ok(1)); // SHR : 1000 -> 0001
+        assert_eq!(calcule(-1, 1, 0x28), Ok(i64::MAX)); // SHR est logique (exemple de B.6)
+        assert_eq!(calcule(-1, 1, 0x2D), Ok(-1)); // SAR garde le signe (exemple de B.6)
+        assert_eq!(calcule(-7, 1, 0x2D), Ok(-4)); // SAR (exemple de B.6)
+    }
+
+    #[test]
+    fn decalage_hors_de_0_63_ne_faute_jamais() {
+        for n in [64, 100, -1] {
+            assert_eq!(calcule(5, n, 0x27), Ok(0), "SHL {n}");
+            assert_eq!(calcule(-5, n, 0x28), Ok(0), "SHR {n}");
+            assert_eq!(calcule(5, n, 0x2D), Ok(0), "SAR positif {n}");
+            assert_eq!(calcule(-5, n, 0x2D), Ok(-1), "SAR négatif {n}");
         }
     }
 }
