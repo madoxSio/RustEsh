@@ -4,6 +4,9 @@ use pbc::{Fault, Instruction, Program, decode};
 
 use crate::Stack;
 
+/// Nombre de cases de la mémoire (spec : 256).
+pub const MEMORY_SIZE: usize = 256;
+
 /// Ce qui se passe après un pas d'exécution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
@@ -20,6 +23,7 @@ pub struct Machine<'a> {
     pc: usize,
     gas: u16,
     stack: Stack,
+    memory: [i64; MEMORY_SIZE],
 }
 
 impl<'a> Machine<'a> {
@@ -30,6 +34,7 @@ impl<'a> Machine<'a> {
             pc: 0,
             gas: gas_budget,
             stack: Stack::new(),
+            memory: [0; MEMORY_SIZE],
         }
     }
 
@@ -165,6 +170,28 @@ impl<'a> Machine<'a> {
                 };
                 self.stack.push(v)?;
             }
+            // -- v (adresse fixe, écrite dans l'instruction)
+            Instruction::Load(k) => {
+                let v = *self.cell(i64::from(k))?;
+                self.stack.push(v)?;
+            }
+            // v -- (adresse fixe, écrite dans l'instruction)
+            Instruction::Store(k) => {
+                let v = self.stack.pop()?;
+                *self.cell(i64::from(k))? = v;
+            }
+            // addr -- v (adresse prise sur la pile)
+            Instruction::LoadX => {
+                let addr = self.stack.pop()?;
+                let v = *self.cell(addr)?;
+                self.stack.push(v)?;
+            }
+            // v addr -- (adresse prise sur la pile)
+            Instruction::StoreX => {
+                let addr = self.stack.pop()?;
+                let v = self.stack.pop()?;
+                *self.cell(addr)? = v;
+            }
             // a --
             Instruction::Drop => {
                 self.stack.pop()?;
@@ -217,6 +244,17 @@ impl<'a> Machine<'a> {
         }
     }
 
+    /// La case mémoire à l'adresse donnée, ou `OutOfBounds` si elle n'existe pas.
+    fn cell(&mut self, addr: i64) -> Result<&mut i64, Fault> {
+        let index = usize::try_from(addr).map_err(|_| Fault::OutOfBounds)?;
+        self.memory.get_mut(index).ok_or(Fault::OutOfBounds)
+    }
+
+    /// La mémoire, en lecture seule.
+    pub fn memory(&self) -> &[i64; MEMORY_SIZE] {
+        &self.memory
+    }
+
     /// La pile, en lecture seule.
     pub fn stack(&self) -> &Stack {
         &self.stack
@@ -264,6 +302,10 @@ fn gas_cost(instruction: Instruction) -> u16 {
         Instruction::Shl => 3,
         Instruction::Shr => 6,
         Instruction::Sar => 6,
+        Instruction::LoadX => 4,
+        Instruction::StoreX => 5,
+        Instruction::Load(_) => 3,
+        Instruction::Store(_) => 4,
         // Temporaire : complété avec les autres instructions.
         _ => 0,
     }
@@ -458,5 +500,52 @@ mod tests {
             assert_eq!(calcule(5, n, 0x2D), Ok(0), "SAR positif {n}");
             assert_eq!(calcule(-5, n, 0x2D), Ok(-1), "SAR négatif {n}");
         }
+    }
+
+    #[test]
+    fn store_puis_load_a_adresse_fixe() {
+        // PUSHI16 42, STORE 7, LOAD 7, HALT
+        let p = programme(&[0x02, 0x00, 0x2A, 0x33, 0x07, 0x32, 0x07, 0x00]);
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Ok(()));
+        assert_eq!(m.memory()[7], 42);
+        assert_eq!(m.stack().clone().pop(), Ok(42));
+        assert_eq!(m.gas(), 1000 - 1 - 4 - 3);
+    }
+
+    #[test]
+    fn storex_puis_loadx_adresse_calculee() {
+        // PUSHI16 9, PUSHI16 255, STOREX, PUSHI16 255, LOADX, HALT
+        let p = programme(&[
+            0x02, 0x00, 0x09, 0x02, 0x00, 0xFF, 0x31, 0x02, 0x00, 0xFF, 0x30, 0x00,
+        ]);
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Ok(()));
+        assert_eq!(m.memory()[255], 9);
+        assert_eq!(m.stack().clone().pop(), Ok(9));
+    }
+
+    #[test]
+    fn adresse_hors_memoire_donne_out_of_bounds() {
+        for addr in [256, -1, i64::MAX, i64::MIN] {
+            let p = programme(&[0x30, 0x00]); // LOADX, HALT
+            let mut m = Machine::new(&p, 1000);
+            m.stack.push(addr).unwrap();
+            assert_eq!(m.run(), Err(Fault::OutOfBounds), "LOADX {addr}");
+
+            let p = programme(&[0x31, 0x00]); // STOREX, HALT
+            let mut m = Machine::new(&p, 1000);
+            m.stack.push(1).unwrap();
+            m.stack.push(addr).unwrap();
+            assert_eq!(m.run(), Err(Fault::OutOfBounds), "STOREX {addr}");
+        }
+    }
+
+    #[test]
+    fn store_sur_pile_vide_donne_stack_underflow() {
+        // Cas 063 du corpus : STORE 0 sur une pile vide.
+        let p = programme(&[0x33, 0x00, 0x00]);
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Err(Fault::StackUnderflow));
     }
 }

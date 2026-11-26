@@ -3,5 +3,5 @@
 mod machine;
 mod stack;
 
-pub use machine::{Machine, Step};
+pub use machine::{MEMORY_SIZE, Machine, Step};
 pub use stack::{STACK_SIZE, Stack};
