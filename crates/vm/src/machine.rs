@@ -231,6 +231,19 @@ impl<'a> Machine<'a> {
                 self.pc = self.pop_call()?;
                 return Ok(Step::Continue);
             }
+            // t -- (saut à la cible absolue t, prise sur la pile)
+            Instruction::JmpX => {
+                let t = self.stack.pop()?;
+                self.pc = self.check_target(t)?;
+                return Ok(Step::Continue);
+            }
+            // t -- (note l'adresse de retour, puis saut à la cible absolue t)
+            Instruction::CallX => {
+                let t = self.stack.pop()?;
+                self.push_call(self.pc + instruction.size())?;
+                self.pc = self.check_target(t)?;
+                return Ok(Step::Continue);
+            }
             // -- (le panneau « arrivée » : ne fait rien)
             Instruction::JumpDest => {}
             // a --
@@ -390,6 +403,8 @@ fn gas_cost(instruction: Instruction) -> u16 {
         Instruction::JumpDest => 1,
         Instruction::Call(_) => 6,
         Instruction::Return => 4,
+        Instruction::JmpX => 3,
+        Instruction::CallX => 7,
         // Temporaire : complété avec les autres instructions.
         _ => 0,
     }
@@ -709,5 +724,38 @@ mod tests {
     fn return_sans_appel_donne_call_stack_underflow() {
         let p = programme(&[0x51]); // RETURN
         assert_eq!(Machine::new(&p, 1000).run(), Err(Fault::CallStackUnderflow));
+    }
+
+    #[test]
+    fn jmpx_saute_a_une_adresse_absolue() {
+        // 0: PUSHI16 4 | 3: JMPX | 4: JUMPDEST | 5: HALT
+        let p = programme(&[0x02, 0x00, 0x04, 0x44, 0x43, 0x00]);
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Ok(()));
+        assert!(m.stack().is_empty()); // JMPX a dépilé sa cible
+    }
+
+    #[test]
+    fn jmpx_vers_une_mauvaise_cible_donne_bad_jump() {
+        for t in [0, -1, 100] {
+            // JMPX, HALT : la cible 0 est le JMPX lui-même, pas un JUMPDEST.
+            let p = programme(&[0x44, 0x00]);
+            let mut m = Machine::new(&p, 1000);
+            m.stack.push(t).unwrap();
+            assert_eq!(m.run(), Err(Fault::BadJump), "JMPX {t}");
+        }
+    }
+
+    #[test]
+    fn callx_revient_comme_call() {
+        // 0: PUSHI16 6 | 3: CALLX | 4: HALT | 5: HALT | 6: JUMPDEST | 7: PUSHI16 42 | 10: RETURN
+        // retour en 4 (juste après le CALLX)
+        let p = programme(&[
+            0x02, 0x00, 0x06, 0x52, 0x00, 0x00, 0x43, 0x02, 0x00, 0x2A, 0x51,
+        ]);
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Ok(()));
+        assert_eq!(contenu(&m), vec![42]);
+        assert_eq!(m.gas(), 1000 - (1 + 7 + 1 + 1 + 4));
     }
 }
