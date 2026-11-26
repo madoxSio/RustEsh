@@ -192,6 +192,29 @@ impl<'a> Machine<'a> {
                 let v = self.stack.pop()?;
                 *self.cell(addr)? = v;
             }
+            // -- (saut relatif, toujours)
+            Instruction::Jmp(d) => {
+                self.pc = self.jump_target(instruction.size(), d)?;
+                return Ok(Step::Continue);
+            }
+            // c -- (saute seulement si c vaut 0)
+            Instruction::Jz(d) => {
+                let c = self.stack.pop()?;
+                if c == 0 {
+                    self.pc = self.jump_target(instruction.size(), d)?;
+                    return Ok(Step::Continue);
+                }
+            }
+            // c -- (saute seulement si c ne vaut pas 0)
+            Instruction::Jnz(d) => {
+                let c = self.stack.pop()?;
+                if c != 0 {
+                    self.pc = self.jump_target(instruction.size(), d)?;
+                    return Ok(Step::Continue);
+                }
+            }
+            // -- (le panneau « arrivée » : ne fait rien)
+            Instruction::JumpDest => {}
             // a --
             Instruction::Drop => {
                 self.stack.pop()?;
@@ -241,6 +264,21 @@ impl<'a> Machine<'a> {
             if self.step()? == Step::Halted {
                 return Ok(());
             }
+        }
+    }
+
+    /// Cible d'un saut relatif : `pc + taille + d`, comptée depuis l'instruction suivante (B.4).
+    fn jump_target(&self, size: usize, d: i16) -> Result<usize, Fault> {
+        let target = self.pc as i64 + size as i64 + i64::from(d);
+        self.check_target(target)
+    }
+
+    /// Vérifie une cible de saut, dans l'ordre de B.4 : dans le code, puis sur un `JUMPDEST`.
+    fn check_target(&self, target: i64) -> Result<usize, Fault> {
+        let index = usize::try_from(target).map_err(|_| Fault::BadJump)?;
+        match self.program.code().get(index) {
+            Some(0x43) => Ok(index),
+            _ => Err(Fault::BadJump),
         }
     }
 
@@ -306,6 +344,10 @@ fn gas_cost(instruction: Instruction) -> u16 {
         Instruction::StoreX => 5,
         Instruction::Load(_) => 3,
         Instruction::Store(_) => 4,
+        Instruction::Jmp(_) => 2,
+        Instruction::Jz(_) => 2,
+        Instruction::Jnz(_) => 2,
+        Instruction::JumpDest => 1,
         // Temporaire : complété avec les autres instructions.
         _ => 0,
     }
@@ -547,5 +589,54 @@ mod tests {
         let p = programme(&[0x33, 0x00, 0x00]);
         let mut m = Machine::new(&p, 1000);
         assert_eq!(m.run(), Err(Fault::StackUnderflow));
+    }
+
+    #[test]
+    fn jmp_saute_par_dessus_une_instruction() {
+        // 0: PUSHI16 1 | 3: JMP +3 | 6: PUSHI16 2 | 9: JUMPDEST | 10: HALT
+        // cible = 3 + 3 + 3 = 9
+        let p = programme(&[
+            0x02, 0x00, 0x01, 0x40, 0x00, 0x03, 0x02, 0x00, 0x02, 0x43, 0x00,
+        ]);
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Ok(()));
+        assert_eq!(contenu(&m), vec![1]); // PUSHI16 2 a été sauté
+    }
+
+    #[test]
+    fn jnz_fait_une_boucle() {
+        // Compte à rebours de 3 à 0.
+        // 0: PUSHI16 3 | 3: JUMPDEST | 4: PUSHI16 1 | 7: SUB | 8: DUP | 9: JNZ -9 | 12: HALT
+        // cible = 9 + 3 - 9 = 3
+        let p = programme(&[
+            0x02, 0x00, 0x03, 0x43, 0x02, 0x00, 0x01, 0x11, 0x04, 0x42, 0xFF, 0xF7, 0x00,
+        ]);
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Ok(()));
+        assert_eq!(contenu(&m), vec![0]);
+        // PUSHI16 3 (1) + 3 tours de JUMPDEST, PUSHI16, SUB, DUP, JNZ (1+1+2+1+2) + HALT (0)
+        assert_eq!(m.gas(), 1000 - 1 - 3 * 7);
+    }
+
+    #[test]
+    fn cible_sans_jumpdest_donne_bad_jump() {
+        // JMP +0 : la cible est le HALT qui suit, pas un JUMPDEST.
+        let p = programme(&[0x40, 0x00, 0x00, 0x00]);
+        assert_eq!(Machine::new(&p, 1000).run(), Err(Fault::BadJump));
+        // JMP +100 : hors du code.
+        let p = programme(&[0x40, 0x00, 0x64, 0x00]);
+        assert_eq!(Machine::new(&p, 1000).run(), Err(Fault::BadJump));
+        // JMP -10 : avant le début du code.
+        let p = programme(&[0x40, 0xFF, 0xF6, 0x00]);
+        assert_eq!(Machine::new(&p, 1000).run(), Err(Fault::BadJump));
+    }
+
+    #[test]
+    fn jz_ne_verifie_la_cible_que_s_il_saute() {
+        // PUSHI16 1, JZ +100, HALT : 1 n'est pas 0, donc pas de saut et pas de BadJump.
+        let p = programme(&[0x02, 0x00, 0x01, 0x41, 0x00, 0x64, 0x00]);
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Ok(()));
+        assert!(m.stack().is_empty()); // JZ a quand même dépilé
     }
 }
