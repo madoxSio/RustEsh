@@ -60,6 +60,19 @@ impl<'a> Machine<'a> {
         match instruction {
             Instruction::Halt => return Ok(Step::Halted),
             Instruction::PushI16(n) => self.stack.push(i64::from(n))?,
+            // -- v (v = constants[k], k écrit dans l'instruction)
+            Instruction::Const(k) => {
+                let v = self.constant(i64::from(k))?;
+                self.stack.push(v)?;
+            }
+            // k -- v (v = constants[k], k pris sur la pile)
+            Instruction::ConstX => {
+                let k = self.stack.pop()?;
+                let v = self.constant(k)?;
+                self.stack.push(v)?;
+            }
+            // -- g (gaz restant, le coût de GAS déjà payé : B.7)
+            Instruction::Gas => self.stack.push(i64::from(self.gas))?,
             Instruction::Add => {
                 let b = self.stack.pop()?;
                 let a = self.stack.pop()?;
@@ -298,6 +311,16 @@ impl<'a> Machine<'a> {
         }
     }
 
+    /// La constante numéro `k` du programme, ou `BadConst` si elle n'existe pas.
+    fn constant(&self, k: i64) -> Result<i64, Fault> {
+        let index = usize::try_from(k).map_err(|_| Fault::BadConst)?;
+        self.program
+            .constants()
+            .get(index)
+            .copied()
+            .ok_or(Fault::BadConst)
+    }
+
     /// Note une adresse de retour dans la pile d'appels.
     fn push_call(&mut self, addr: usize) -> Result<(), Fault> {
         let case = self
@@ -371,6 +394,9 @@ fn gas_cost(instruction: Instruction) -> u16 {
     match instruction {
         Instruction::Halt => 0,
         Instruction::PushI16(_) => 1,
+        Instruction::Const(_) => 1,
+        Instruction::ConstX => 2,
+        Instruction::Gas => 2,
         Instruction::Drop => 1,
         Instruction::Dup => 1,
         Instruction::Swap => 1,
@@ -417,7 +443,16 @@ mod tests {
     /// j'ai codé ca à la maain eheh : )
     /// Fabrique un programme .pbc sans constantes autour du code donné.
     fn programme(code: &[u8]) -> Program {
-        let mut bytes = vec![0x50, 0x42, 0x43, 0x31, 0x01, 0x00, 0x00, 0x00];
+        programme_avec_constantes(&[], code)
+    }
+
+    /// Fabrique un programme .pbc avec la table de constantes et le code donnés.
+    fn programme_avec_constantes(constantes: &[i64], code: &[u8]) -> Program {
+        let mut bytes = vec![0x50, 0x42, 0x43, 0x31, 0x01, 0x00];
+        bytes.extend_from_slice(&(constantes.len() as u16).to_be_bytes());
+        for c in constantes {
+            bytes.extend_from_slice(&c.to_be_bytes());
+        }
         bytes.extend_from_slice(&(code.len() as u32).to_be_bytes());
         bytes.extend_from_slice(code);
         Program::load(&bytes).unwrap()
@@ -757,5 +792,52 @@ mod tests {
         assert_eq!(m.run(), Ok(()));
         assert_eq!(contenu(&m), vec![42]);
         assert_eq!(m.gas(), 1000 - (1 + 7 + 1 + 1 + 4));
+    }
+
+    #[test]
+    fn const_lit_la_table_de_constantes() {
+        // CONST 1, HALT
+        let p = programme_avec_constantes(&[10, i64::MIN], &[0x01, 0x00, 0x01, 0x00]);
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Ok(()));
+        assert_eq!(contenu(&m), vec![i64::MIN]);
+    }
+
+    #[test]
+    fn constx_lit_la_constante_dont_le_numero_est_sur_la_pile() {
+        // PUSHI16 0, CONSTX, HALT
+        let p = programme_avec_constantes(&[77], &[0x02, 0x00, 0x00, 0x08, 0x00]);
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Ok(()));
+        assert_eq!(contenu(&m), vec![77]);
+    }
+
+    #[test]
+    fn constante_inexistante_donne_bad_const() {
+        // CONST 1 alors qu'il n'y a qu'une constante.
+        let p = programme_avec_constantes(&[77], &[0x01, 0x00, 0x01, 0x00]);
+        assert_eq!(Machine::new(&p, 1000).run(), Err(Fault::BadConst));
+        // CONSTX avec un numéro négatif ou trop grand.
+        for k in [-1, 1, i64::MAX] {
+            let p = programme_avec_constantes(&[77], &[0x08, 0x00]);
+            let mut m = Machine::new(&p, 1000);
+            m.stack.push(k).unwrap();
+            assert_eq!(m.run(), Err(Fault::BadConst), "CONSTX {k}");
+        }
+    }
+
+    #[test]
+    fn constx_sur_pile_vide_donne_stack_underflow() {
+        let p = programme_avec_constantes(&[77], &[0x08, 0x00]);
+        assert_eq!(Machine::new(&p, 1000).run(), Err(Fault::StackUnderflow));
+    }
+
+    #[test]
+    fn gas_en_pc_0_empile_998() {
+        // Exemple de B.7 : GAS, HALT avec un budget de 1000.
+        let p = programme(&[0x71, 0x00]);
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Ok(()));
+        assert_eq!(contenu(&m), vec![998]);
     }
 }
