@@ -7,6 +7,9 @@ use crate::Stack;
 /// Nombre de cases de la mémoire (spec : 256).
 pub const MEMORY_SIZE: usize = 256;
 
+/// Nombre maximum d'appels imbriqués (spec : 16).
+pub const CALL_STACK_SIZE: usize = 16;
+
 /// Ce qui se passe après un pas d'exécution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
@@ -24,6 +27,8 @@ pub struct Machine<'a> {
     gas: u16,
     stack: Stack,
     memory: [i64; MEMORY_SIZE],
+    calls: [usize; CALL_STACK_SIZE],
+    call_depth: usize,
 }
 
 impl<'a> Machine<'a> {
@@ -35,6 +40,8 @@ impl<'a> Machine<'a> {
             gas: gas_budget,
             stack: Stack::new(),
             memory: [0; MEMORY_SIZE],
+            calls: [0; CALL_STACK_SIZE],
+            call_depth: 0,
         }
     }
 
@@ -213,6 +220,17 @@ impl<'a> Machine<'a> {
                     return Ok(Step::Continue);
                 }
             }
+            // -- (note l'adresse de retour, puis saut relatif)
+            Instruction::Call(d) => {
+                self.push_call(self.pc + instruction.size())?;
+                self.pc = self.jump_target(instruction.size(), d)?;
+                return Ok(Step::Continue);
+            }
+            // -- (retourne à la dernière adresse notée)
+            Instruction::Return => {
+                self.pc = self.pop_call()?;
+                return Ok(Step::Continue);
+            }
             // -- (le panneau « arrivée » : ne fait rien)
             Instruction::JumpDest => {}
             // a --
@@ -265,6 +283,28 @@ impl<'a> Machine<'a> {
                 return Ok(());
             }
         }
+    }
+
+    /// Note une adresse de retour dans la pile d'appels.
+    fn push_call(&mut self, addr: usize) -> Result<(), Fault> {
+        let case = self
+            .calls
+            .get_mut(self.call_depth)
+            .ok_or(Fault::CallStackOverflow)?;
+        *case = addr;
+        self.call_depth += 1;
+        Ok(())
+    }
+
+    /// Retire et renvoie la dernière adresse de retour notée.
+    fn pop_call(&mut self) -> Result<usize, Fault> {
+        let new_depth = self
+            .call_depth
+            .checked_sub(1)
+            .ok_or(Fault::CallStackUnderflow)?;
+        let addr = *self.calls.get(new_depth).ok_or(Fault::CallStackUnderflow)?;
+        self.call_depth = new_depth;
+        Ok(addr)
     }
 
     /// Cible d'un saut relatif : `pc + taille + d`, comptée depuis l'instruction suivante (B.4).
@@ -348,6 +388,8 @@ fn gas_cost(instruction: Instruction) -> u16 {
         Instruction::Jz(_) => 2,
         Instruction::Jnz(_) => 2,
         Instruction::JumpDest => 1,
+        Instruction::Call(_) => 6,
+        Instruction::Return => 4,
         // Temporaire : complété avec les autres instructions.
         _ => 0,
     }
@@ -638,5 +680,34 @@ mod tests {
         let mut m = Machine::new(&p, 1000);
         assert_eq!(m.run(), Ok(()));
         assert!(m.stack().is_empty()); // JZ a quand même dépilé
+    }
+
+    #[test]
+    fn call_puis_return_revient_apres_l_appel() {
+        // 0: PUSHI16 3 | 3: CALL +1 | 6: HALT | 7: JUMPDEST | 8: DUP | 9: MUL | 10: RETURN
+        // cible = 3 + 3 + 1 = 7 ; retour en 6 (le HALT)
+        let p = programme(&[
+            0x02, 0x00, 0x03, 0x50, 0x00, 0x01, 0x00, 0x43, 0x04, 0x12, 0x51,
+        ]);
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Ok(()));
+        assert_eq!(contenu(&m), vec![9]);
+        assert_eq!(m.gas(), 1000 - (1 + 6 + 1 + 1 + 2 + 4));
+    }
+
+    #[test]
+    fn dix_septieme_appel_donne_call_stack_overflow() {
+        // Cas 023 du corpus : une fonction qui s'appelle elle-même sans fin.
+        // 0: CALL +1 | 3: HALT | 4: JUMPDEST | 5: CALL -4 | 8: RETURN
+        let p = programme(&[0x50, 0x00, 0x01, 0x00, 0x43, 0x50, 0xFF, 0xFC, 0x51]);
+        let mut m = Machine::new(&p, 1000);
+        assert_eq!(m.run(), Err(Fault::CallStackOverflow));
+        assert_eq!(1000 - m.gas(), 118); // gas_used du fichier attendu
+    }
+
+    #[test]
+    fn return_sans_appel_donne_call_stack_underflow() {
+        let p = programme(&[0x51]); // RETURN
+        assert_eq!(Machine::new(&p, 1000).run(), Err(Fault::CallStackUnderflow));
     }
 }
